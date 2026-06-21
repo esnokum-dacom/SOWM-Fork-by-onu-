@@ -1,0 +1,546 @@
+// sowm - An itsy bitsy floating window manager.
+
+#include <X11/XF86keysym.h>
+#include <X11/XKBlib.h>
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#include <X11/extensions/Xinerama.h>
+#include <X11/extensions/shape.h>
+#include <X11/keysym.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "sowm.h"
+
+static client *list = NULL, *ws_list[10] = {0}, *cur = NULL;
+static workspace *workspaces = NULL;
+static int ws_cap = 0, ws_count = 0, ws = 0;
+
+static int sw, sh;
+
+static unsigned int ww, wh;
+
+static Display *d;
+static XButtonEvent mouse;
+static Window root;
+
+static void (*events[LASTEvent])(XEvent *e) = {
+    [ButtonPress] = button_press,
+    [ButtonRelease] = button_release,
+    [ConfigureRequest] = configure_request,
+    [KeyPress] = key_press,
+    [MapRequest] = map_request,
+    [MappingNotify] = mapping_notify,
+    [DestroyNotify] = notify_destroy,
+    [EnterNotify] = notify_enter,
+    [MotionNotify] = notify_motion};
+
+#include "config.h"
+
+void win_focus(client *c) {
+  cur = c;
+  XSetInputFocus(d, cur->w, RevertToParent, CurrentTime);
+  XChangeProperty(d, root, XInternAtom(d, "_NET_ACTIVE_WINDOW", False),
+                  XA_WINDOW, 32, PropModeReplace, (unsigned char *)&cur->w, 1);
+}
+
+void notify_destroy(XEvent *e) {
+  win_del(e->xdestroywindow.window);
+
+  if (list)
+    win_focus(list->prev);
+}
+
+void notify_enter(XEvent *e) {
+  while (XCheckTypedEvent(d, EnterNotify, e))
+    ;
+
+    for
+      win if (c->w == e->xcrossing.window) win_focus(c);
+}
+
+void notify_motion(XEvent *e) {
+  if (!mouse.subwindow || cur->f)
+    return;
+
+  while (XCheckTypedEvent(d, MotionNotify, e))
+    ;
+
+  int xd = e->xbutton.x_root - mouse.x_root;
+  int yd = e->xbutton.y_root - mouse.y_root;
+
+  XMoveResizeWindow(d, mouse.subwindow, wx + (mouse.button == 1 ? xd : 0),
+                    wy + (mouse.button == 1 ? yd : 0),
+                    MAX(1, ww + (mouse.button == 3 ? xd : 0)),
+                    MAX(1, wh + (mouse.button == 3 ? yd : 0)));
+  if (mouse.button == 3) {
+    win_round_corners(mouse.subwindow, ROUND_CORNERS);
+  }
+}
+
+void key_press(XEvent *e) {
+  KeySym keysym = XkbKeycodeToKeysym(d, e->xkey.keycode, 0, 0);
+
+  for (unsigned int i = 0; i < sizeof(keys) / sizeof(*keys); ++i)
+    if (keys[i].keysym == keysym &&
+        mod_clean(keys[i].mod) == mod_clean(e->xkey.state))
+      keys[i].function(keys[i].arg);
+}
+
+void button_press(XEvent *e) {
+  if (!e->xbutton.subwindow)
+    return;
+
+  win_size(e->xbutton.subwindow, &wx, &wy, &ww, &wh);
+  XRaiseWindow(d, e->xbutton.subwindow);
+  mouse = e->xbutton;
+}
+
+void button_release(XEvent *e) { mouse.subwindow = 0; }
+
+void win_add(Window w) {
+  client *c;
+
+  if (!(c = (client *)calloc(1, sizeof(client))))
+    exit(1);
+
+  c->w = w;
+
+  if (list) {
+    list->prev->next = c;
+    c->prev = list->prev;
+    list->prev = c;
+    c->next = list;
+
+  } else {
+    list = c;
+    list->prev = list->next = list;
+  }
+
+  ws_save(ws);
+}
+
+void win_del(Window w) {
+  client *x = 0;
+
+    for
+      win if (c->w == w) x = c;
+
+    if (!list || !x)
+      return;
+    if (x->prev == x)
+      list = 0;
+    if (list == x)
+      list = x->next;
+    if (x->next)
+      x->next->prev = x->prev;
+    if (x->prev)
+      x->prev->next = x->next;
+
+    free(x);
+    ws_save(ws);
+}
+
+void win_kill(const Arg arg) {
+  if (!cur)
+    return;
+
+  Atom *protocols;
+  int n;
+  Atom wm_delete = XInternAtom(d, "WM_DELETE_WINDOW", False);
+  Atom wm_protos = XInternAtom(d, "WM_PROTOCOLS", False);
+
+  if (XGetWMProtocols(d, cur->w, &protocols, &n)) {
+    int supports_delete = 0;
+    for (int i = 0; i < n; i++) {
+      if (protocols[i] == wm_delete) {
+        supports_delete = 1;
+        break;
+      }
+    }
+    XFree(protocols);
+
+    if (supports_delete) {
+      XEvent ev = {.xclient = {
+                       .type = ClientMessage,
+                       .window = cur->w,
+                       .message_type = wm_protos,
+                       .format = 32,
+                       .data.l[0] = wm_delete,
+                       .data.l[1] = CurrentTime,
+                   }};
+      XSendEvent(d, cur->w, False, NoEventMask, &ev);
+      return;
+    }
+  }
+
+  XKillClient(d, cur->w);
+}
+
+void win_center(const Arg arg) {
+  if (!cur)
+    return;
+
+  win_size(cur->w, &(int){0}, &(int){0}, &ww, &wh);
+
+  int px, py, dummy_i;
+  unsigned int dummy_u;
+  Window dummy_w;
+  XQueryPointer(d, DefaultRootWindow(d), &dummy_w, &dummy_w, &px, &py, &dummy_i,
+                &dummy_i, &dummy_u);
+
+  int n;
+  XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
+  int mx = 0, my = 0, mw = sw, mh = sh;
+
+  if (info) {
+   for (int i = 0; i < n; i++) {
+      if (px >= info[i].x_org && px < info[i].x_org + info[i].width &&
+          py >= info[i].y_org && py < info[i].y_org + info[i].height) {
+        mx = info[i].x_org;
+        my = info[i].y_org;
+        mw = info[i].width;
+        mh = info[i].height;
+        break;
+      }
+    }
+    XFree(info);
+  }
+
+  XMoveWindow(d, cur->w, mx + (mw - ww) / 2, my + (mh - wh) / 2);
+}
+
+void win_fs(const Arg arg) {
+  if (!cur)
+    return;
+
+  if (!cur->f)
+    win_size(cur->w, &cur->wx, &cur->wy, &cur->ww, &cur->wh);
+
+  int px, py, dummy_i;
+  unsigned int dummy_u;
+  Window dummy_w;
+  XQueryPointer(d, DefaultRootWindow(d), &dummy_w, &dummy_w, &px, &py, &dummy_i,
+                &dummy_i, &dummy_u);
+
+  int n;
+  XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
+  int mx = 0, my = 0, mw = sw, mh = sh;
+
+  if (info) {
+    for (int i = 0; i < n; i++) {
+      if (px >= info[i].x_org && px < info[i].x_org + info[i].width &&
+          py >= info[i].y_org && py < info[i].y_org + info[i].height) {
+
+        mx = info[i].x_org;
+        my = info[i].y_org;
+        mw = info[i].width;
+        mh = info[i].height;
+        break;
+      }
+    }
+    XFree(info);
+  }
+
+  if ((cur->f = cur->f ? 0 : 1))
+    XMoveResizeWindow(d, cur->w, mx, my, mw, mh);
+  else
+    XMoveResizeWindow(d, cur->w, cur->wx, cur->wy, cur->ww, cur->wh);
+
+  win_round_corners(cur->w, cur->f ? 0 : ROUND_CORNERS);
+}
+
+void win_to_ws(const Arg arg) {
+  int tmp = ws;
+
+  if (arg.i == tmp)
+    return;
+
+  ws_sel(arg.i);
+  win_add(cur->w);
+  ws_save(arg.i);
+
+  ws_sel(tmp);
+  win_del(cur->w);
+  XUnmapWindow(d, cur->w);
+  ws_save(tmp);
+  ws_switch(tmp);
+
+  if (list)
+    win_focus(list);
+}
+
+void win_prev(const Arg arg) {
+  if (!cur)
+    return;
+
+  XRaiseWindow(d, cur->prev->w);
+  win_focus(cur->prev);
+}
+
+void win_next(const Arg arg) {
+  if (!cur)
+    return;
+
+  XRaiseWindow(d, cur->next->w);
+  win_focus(cur->next);
+}
+
+void ws_switch(int i) {
+  list = ws_list[ws = i];
+  long data[1] = {(long)i};
+  XChangeProperty(d, root, XInternAtom(d, "_NET_CURRENT_DESKTOP", False), 6, 32,
+                  PropModeReplace, (unsigned char *)data, 1);
+}
+
+void ws_go(const Arg arg) {
+  int tmp = ws;
+
+  if (arg.i == ws)
+    return;
+
+  ws_save(ws);
+  ws_sel(arg.i);
+
+    for
+      win XMapWindow(d, c->w);
+
+    ws_sel(tmp);
+
+    for
+      win XUnmapWindow(d, c->w);
+
+    ws_sel(arg.i);
+    ws_switch(arg.i);
+
+    if (list)
+      win_focus(list);
+    else {
+      cur = 0;
+      XSetInputFocus(d, root, RevertToPointerRoot, CurrentTime);
+      XFlush(d);
+    }
+}
+
+void ws_focusnext(const Arg arg) {
+  int px, py, dummy_i;
+  unsigned int dummy_u;
+  Window dummy_w;
+  XQueryPointer(d, DefaultRootWindow(d), &dummy_w, &dummy_w, &px, &py, &dummy_i,
+                &dummy_i, &dummy_u);
+
+  int n;
+  XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
+  if (!info || n < 2) {
+    XFree(info);
+    return;
+  }
+
+  int cur_monitor = 0;
+  for (int i = 0; i < n; i++) {
+    if (px >= info[i].x_org && px < info[i].x_org + info[i].width &&
+        py >= info[i].y_org && py < info[i].y_org + info[i].height) {
+      cur_monitor = i;
+      break;
+    }
+  }
+
+  int next = (cur_monitor + 1) % n;
+
+  int x = info[next].x_org + info[next].width / 2;
+  int y = info[next].y_org + info[next].height / 2;
+
+  XFree(info);
+  XWarpPointer(d, None, DefaultRootWindow(d), 0, 0, 0, 0, x, y);
+  XFlush(d);
+}
+
+void move_nextmon(const Arg arg) {
+  int px, py, dummy_i;
+  unsigned int dummy_u;
+  Window dummy_w;
+  XQueryPointer(d, DefaultRootWindow(d), &dummy_w, &dummy_w, &px, &py, &dummy_i,
+                &dummy_i, &dummy_u);
+
+  int n;
+  XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
+  if (!info || n < 2) {
+    XFree(info);
+    return;
+  }
+
+  int cur_monitor = -1;
+  for (int i = 0; i < n; i++) {
+    if (px >= info[i].x_org && px < info[i].x_org + info[i].width &&
+        py >= info[i].y_org && py < info[i].y_org + info[i].height) {
+      cur_monitor = i;
+      break;
+    }
+  }
+
+  if (cur_monitor == -1) {
+    XFree(info);
+    return;
+  }
+
+  int next = (cur_monitor + 1) % n;
+
+  int cx = info[next].x_org + info[next].width / 2;
+  int cy = info[next].y_org + info[next].height / 2;
+  XWarpPointer(d, None, DefaultRootWindow(d), 0, 0, 0, 0, cx, cy);
+
+  if (cur) {
+    unsigned int ww, wh, bw, depth;
+    int wx, wy;
+    Window root_ret;
+    XGetGeometry(d, cur->w, &root_ret, &wx, &wy, &ww, &wh, &bw, &depth);
+
+    cur->wx = info[next].x_org + (info[next].width - (int)ww) / 2;
+    cur->wy = info[next].y_org + (info[next].height - (int)wh) / 2;
+    XMoveWindow(d, cur->w, cur->wx, cur->wy);
+  }
+
+  XFree(info);
+  XFlush(d);
+}
+
+void win_round_corners(Window w, int rad) {
+  unsigned int ww, wh, dia = 2 * rad;
+
+  win_size(w, &(int){1}, &(int){1}, &ww, &wh);
+
+  if (ww < dia || wh < dia)
+    return;
+
+  Pixmap mask = XCreatePixmap(d, w, ww, wh, 1);
+
+  if (!mask)
+    return;
+
+  XGCValues xgcv;
+  GC shape_gc = XCreateGC(d, mask, 0, &xgcv);
+
+  if (!shape_gc) {
+    XFreePixmap(d, mask);
+    return;
+  }
+
+  XSetForeground(d, shape_gc, 0);
+  XFillRectangle(d, mask, shape_gc, 0, 0, ww, wh);
+  XSetForeground(d, shape_gc, 1);
+  XFillArc(d, mask, shape_gc, 0, 0, dia, dia, 0, 23040);
+  XFillArc(d, mask, shape_gc, ww - dia - 1, 0, dia, dia, 0, 23040);
+  XFillArc(d, mask, shape_gc, 0, wh - dia - 1, dia, dia, 0, 23040);
+  XFillArc(d, mask, shape_gc, ww - dia - 1, wh - dia - 1, dia, dia, 0, 23040);
+  XFillRectangle(d, mask, shape_gc, rad, 0, ww - dia, wh);
+  XFillRectangle(d, mask, shape_gc, 0, rad, ww, wh - dia);
+  XShapeCombineMask(d, w, ShapeBounding, 0, 0, mask, ShapeSet);
+  XFreePixmap(d, mask);
+  XFreeGC(d, shape_gc);
+}
+
+void configure_request(XEvent *e) {
+  XConfigureRequestEvent *ev = &e->xconfigurerequest;
+
+  XConfigureWindow(d, ev->window, ev->value_mask,
+                   &(XWindowChanges){.x = ev->x,
+                                     .y = ev->y,
+                                     .width = ev->width,
+                                     .height = ev->height,
+                                     .sibling = ev->above,
+                                     .stack_mode = ev->detail});
+  win_round_corners(ev->window, ROUND_CORNERS);
+}
+
+void map_request(XEvent *e) {
+  Window w = e->xmaprequest.window;
+
+  XSelectInput(d, w, StructureNotifyMask | EnterWindowMask);
+  win_size(w, &wx, &wy, &ww, &wh);
+  win_add(w);
+  cur = list->prev;
+
+  if (wx + wy == 0)
+    win_center((Arg){0});
+
+  win_round_corners(w, ROUND_CORNERS);
+  XMapWindow(d, w);
+  win_focus(list->prev);
+}
+
+void mapping_notify(XEvent *e) {
+  XMappingEvent *ev = &e->xmapping;
+
+  if (ev->request == MappingKeyboard || ev->request == MappingModifier) {
+    XRefreshKeyboardMapping(ev);
+    input_grab(root);
+  }
+}
+
+void run(const Arg arg) {
+  if (fork())
+    return;
+  if (d)
+    close(ConnectionNumber(d));
+
+  setsid();
+  execvp((char *)arg.com[0], (char **)arg.com);
+}
+
+void input_grab(Window root) {
+  unsigned int i, j, modifiers[] = {0, LockMask, numlock, numlock | LockMask};
+  XModifierKeymap *modmap = XGetModifierMapping(d);
+  KeyCode code;
+
+  for (i = 0; i < 8; i++)
+    for (int k = 0; k < modmap->max_keypermod; k++)
+      if (modmap->modifiermap[i * modmap->max_keypermod + k] ==
+          XKeysymToKeycode(d, 0xff7f))
+        numlock = (1 << i);
+
+  XUngrabKey(d, AnyKey, AnyModifier, root);
+
+  for (i = 0; i < sizeof(keys) / sizeof(*keys); i++)
+    if ((code = XKeysymToKeycode(d, keys[i].keysym)))
+      for (j = 0; j < sizeof(modifiers) / sizeof(*modifiers); j++)
+        XGrabKey(d, code, keys[i].mod | modifiers[j], root, True, GrabModeAsync,
+                 GrabModeAsync);
+
+  for (i = 1; i < 4; i += 2)
+    for (j = 0; j < sizeof(modifiers) / sizeof(*modifiers); j++)
+      XGrabButton(d, i, MOD | modifiers[j], root, True,
+                  ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                  GrabModeAsync, GrabModeAsync, 0, 0);
+
+  XFreeModifiermap(modmap);
+}
+
+int main(void) {
+  XEvent ev;
+
+  if (!(d = XOpenDisplay(0)))
+    exit(1);
+
+  signal(SIGCHLD, SIG_IGN);
+  XSetErrorHandler(xerror);
+
+  int s = DefaultScreen(d);
+  root = RootWindow(d, s);
+  sw = XDisplayWidth(d, s);
+  sh = XDisplayHeight(d, s);
+
+  long n = WORKSPACES;
+
+  XChangeProperty(d, root, XInternAtom(d, "_NET_NUMBER_OF_DESKTOPS", False),
+                  XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&n, 1);
+
+  XSelectInput(d, root, SubstructureRedirectMask);
+  XDefineCursor(d, root, XCreateFontCursor(d, 68));
+  input_grab(root);
+
+  while (1 && !XNextEvent(d, &ev)) // 1 && will forever be here.
+    if (events[ev.type])
+      events[ev.type](&ev);
+}
