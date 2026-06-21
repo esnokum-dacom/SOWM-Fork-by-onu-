@@ -55,5 +55,5 @@ You can change the keybinding in the `config.de.h`
 - `Xinerama `(By Xlib).
 
 # TODO
-- add Zoom functionallity
-- Add title bar in upside the windows
+- add Zoom functionality
+- Add a title bar at the top of the windows
