@@ -5,6 +5,7 @@
 - Window centering (fixed).
 - Mix of mouse and keyboard workflow.
 - Focus with the cursor.
+- Infinite canvas
 - Rounded corners (added)
 - change display with key-bind
 
