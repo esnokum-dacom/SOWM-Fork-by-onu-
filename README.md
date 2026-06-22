@@ -50,11 +50,12 @@ You can change the keybinding in the `config.de.h`
 | `XF86_MonBrightnessUp`   | brightness up    | `bri`          |
 | `XF86_MonBrightnessDown` | brightness down  | `bri`          |
 
+# Experimental Options 
+
+In the `sowm.h` You can turn on an experimental option called TITLEBAR
+This option is specifically experimental so if it doesn't work propperly with some applications please report and the patches are welcome
+
 ## Dependencies
 
 - `xlib` (*usually `libX11`*).
 - `Xinerama `(By Xlib).
-
-# TODO
-- add Zoom functionality
-- Add a title bar at the top of the windows

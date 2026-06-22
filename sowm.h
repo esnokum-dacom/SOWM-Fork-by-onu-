@@ -1,17 +1,16 @@
 #pragma once
+#include <X11/X.h>
 #include <X11/Xlib.h>
 #include <stdlib.h>
 
 #define MAX_MONITORS 8
-#define WS_INIT_CAP  10
+#define TITLEBAR_HEIGHT 24
+#define TITLEBAR 0
 
 #define win (client *t = 0, *c = list; c && t != list->prev; t = c, c = c->next)
 
-#define canvas_to_screen(val, pan) ((val) - (pan))
-#define screen_to_canvas(val, pan) ((val) + (pan))
-
-#define ws_save(W) ws_list[W] = list
-#define ws_sel(W)  list = ws_list[ws = (W)]
+#define canvas_to_screen(val, pan, zoom) (int)(((val) - (pan)) * (zoom))
+#define screen_to_canvas(val, pan, zoom) ((val) / (zoom) + (pan))
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -41,25 +40,30 @@ struct key {
 
 typedef struct client {
   struct client *next, *prev;
+  Window titlebar;
   int f;
   int wx, wy;
   unsigned int ww, wh;
-  int cx, cy;
+  float cx, cy;
   int monitor;
   Window w;
 } client;
 
 typedef struct {
-  client *clients;
-  int     pan_x[MAX_MONITORS];
-  int     pan_y[MAX_MONITORS];
-} workspace;
+  float pan_x[MAX_MONITORS];
+  float pan_y[MAX_MONITORS];
+  float zoom[MAX_MONITORS];
+} canvas_state;
 
+char *copystr(const char *s);
 void button_press(XEvent *e);
 void button_release(XEvent *e);
 void configure_request(XEvent *e);
 void input_grab(Window root);
 void key_press(XEvent *e);
+void notify_property(XEvent *e);
+void notify_expose(XEvent *e);
+void notify_unmap(XEvent *e);
 void map_request(XEvent *e);
 void mapping_notify(XEvent *e);
 void notify_destroy(XEvent *e);
@@ -75,21 +79,23 @@ void win_kill(const Arg arg);
 void win_prev(const Arg arg);
 void win_next(const Arg arg);
 void win_round_corners(Window w, int rad);
-void win_to_ws(const Arg arg);
-void ws_go(const Arg arg);
-void ws_switch(int i);
-void ws_focusnext(const Arg arg);
 void move_nextmon(const Arg arg);
+void ws_focusnext(const Arg arg);
 
-int  ws_create(void);
-void ws_kill_empty(void);
-void ws_go_pan(const Arg arg);
-
-void canvas_pan(int mon, int dx, int dy);
+void canvas_pan(int mon, float dx, float dy);
 void canvas_pan_key(const Arg arg);
 void canvas_reset(const Arg arg);
 void canvas_apply_all(void);
 void canvas_focus(client *c);
+
+void hud_update(void);
+Window titlebar_create(client *c);
+void titlebar_draw(client *c);
+void titlebar_del(client *c);
+client *client_from_titlebar(Window w);
+int is_titlebar(Window w);
+void client_move(client *c, int x, int y);
+void client_resize(client *c, unsigned int w, unsigned int h);
 
 int  mon_at_ptr(void);
 int  mon_at_win(Window w);
