@@ -41,12 +41,17 @@ struct key {
 typedef struct client {
   struct client *next, *prev;
   Window titlebar;
+  Window w;
+  int monitor;
   int f;
   int wx, wy;
-  unsigned int ww, wh;
+  int x, y;
+  int width, height;
+  int oldx, oldy, oldwidth, oldheight;
+  int basew, baseh, incw, inch, maxw, maxh, minw, minh;
+  float mina, maxa;      
   float cx, cy;
-  int monitor;
-  Window w;
+  unsigned int ww, wh;
 } client;
 
 typedef struct {
@@ -94,7 +99,11 @@ void titlebar_del(client *c);
 client *client_from_titlebar(Window w);
 int is_titlebar(Window w);
 void client_move(client *c, int x, int y);
+void updatesizehints(client *c);
+void resizeclient(client *c, int w, int h);
+void configure(client *c);
 void client_resize(client *c, unsigned int w, unsigned int h);
+int applysizehints(client *c, int *w, int *h);
 
 int  mon_at_ptr(void);
 int  mon_at_win(Window w);

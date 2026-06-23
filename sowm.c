@@ -225,21 +225,109 @@ int is_titlebar (Window w) {
 void client_move(client *c, int x, int y) {
     if (!c) return;
 
+    c->x = x;
+    c->y = y;
+
     XMoveWindow(d, c->w, x, y);
 
     if (c->titlebar)
         XMoveWindow(d, c->titlebar, x, y - TITLEBAR_HEIGHT);
 }
 
-void client_resize(client *c, unsigned int w, unsigned int h) {
-    if (!c) return;
+void configure(client *c) {
+    XConfigureEvent ce;
 
-    XResizeWindow(d, c->w, w, h);
+    ce.type = ConfigureNotify;
+    ce.display = d;
+    ce.event = c->w;
+    ce.window = c->w;
+    ce.x = c->x;
+    ce.y = c->y;
+    ce.width = c->width;
+    ce.height = c->height;
+    ce.border_width = 0;
+    ce.above = None;
+    ce.override_redirect = False;
+    XSendEvent(d, c->w, False, StructureNotifyMask, (XEvent *)&ce);
+}
+
+void resizeclient(client *c, int w, int h) {
+    XWindowChanges wc;
+
+    c->oldwidth = c->width;   c->width  = wc.width  = w;
+    c->oldheight = c->height; c->height = wc.height = h;
+
+    XConfigureWindow(d, c->w, CWWidth | CWHeight, &wc);
+    configure(c);
 
     if (c->titlebar) {
         XResizeWindow(d, c->titlebar, w, TITLEBAR_HEIGHT);
         titlebar_draw(c);
     }
+
+    XSync(d, False);
+}
+
+void client_resize(client *c, unsigned int w, unsigned int h) {
+    if (!c) return;
+    int nw = (int)w, nh = (int)h;
+    if (applysizehints(c, &nw, &nh))
+        resizeclient(c, nw, nh);
+}
+
+void updatesizehints(client *c) {
+    long msize;
+    XSizeHints size;
+
+    if (!XGetWMNormalHints(d, c->w, &size, &msize))
+        size.flags = PSize;
+
+    if (size.flags & PBaseSize) { c->basew = size.base_width; c->baseh = size.base_height; }
+    else if (size.flags & PMinSize) { c->basew = size.min_width; c->baseh = size.min_height; }
+    else c->basew = c->baseh = 0;
+
+    if (size.flags & PResizeInc) { c->incw = size.width_inc; c->inch = size.height_inc; }
+    else c->incw = c->inch = 0;
+
+    if (size.flags & PMaxSize) { c->maxw = size.max_width; c->maxh = size.max_height; }
+    else c->maxw = c->maxh = 0;
+
+    if (size.flags & PMinSize) { c->minw = size.min_width; c->minh = size.min_height; }
+    else if (size.flags & PBaseSize) { c->minw = size.base_width; c->minh = size.base_height; }
+    else c->minw = c->minh = 0;
+
+    if (size.flags & PAspect) {
+        c->mina = (float)size.min_aspect.y / size.min_aspect.x;
+        c->maxa = (float)size.max_aspect.x / size.max_aspect.y;
+    } else c->mina = c->maxa = 0.0;
+}
+
+int applysizehints(client *c, int *w, int *h) {
+    int baseismin;
+
+    *w = *w < 1 ? 1 : *w;
+    *h = *h < 1 ? 1 : *h;
+
+    baseismin = (c->basew == c->minw) && (c->baseh == c->minh);
+    if (!baseismin) { *w -= c->basew; *h -= c->baseh; }
+
+    if (c->mina > 0 && c->maxa > 0) {
+        if (c->maxa < (float)*w / *h)
+            *w = *h * c->maxa + 0.5;
+        else if (c->mina < (float)*h / *w)
+            *h = *w * c->mina + 0.5;
+    }
+
+    if (c->incw) *w -= *w % c->incw;
+    if (c->inch) *h -= *h % c->inch;
+
+    *w = MAX(*w + (baseismin ? 0 : c->basew), c->minw > 0 ? c->minw : 1);
+    *h = MAX(*h + (baseismin ? 0 : c->baseh), c->minh > 0 ? c->minh : 1);
+
+    if (c->maxw) *w = MIN(*w, c->maxw);
+    if (c->maxh) *h = MIN(*h, c->maxh);
+
+    return *w != c->width || *h != c->height;
 }
 
 char *client_get_title(Window w) {
@@ -453,6 +541,8 @@ void notify_property(XEvent *e) {
             if (ev->atom == XA_WM_NAME || ev->atom == visible || ev->atom == name)
             {
                 titlebar_draw(c);
+            } else if (ev->atom == XA_WM_NORMAL_HINTS) {
+                updatesizehints(c);
             }
 
             break;
@@ -552,6 +642,12 @@ void win_add(Window w) {
     float z = canvas.zoom[m];
     c->cx = (float)sx / z + canvas.pan_x[m];
     c->cy = (float)sy / z + canvas.pan_y[m];
+
+    c->x = sx;
+    c->y = sy;
+    c->width  = (int)dw2;
+    c->height = (int)dh2;
+    updatesizehints(c);
 
     if (TITLEBAR){
 	c->titlebar = titlebar_create(c);
@@ -742,7 +838,7 @@ void configure_request(XEvent *e) {
 
 void map_request(XEvent *e) {
     Window w = e->xmaprequest.window;
-    XSelectInput(d, w, StructureNotifyMask | EnterWindowMask);
+    XSelectInput(d, w, StructureNotifyMask | EnterWindowMask | PropertyChangeMask);
     win_size(w, &wx, &wy, &ww, &wh);
     win_add(w);
     cur = list->prev;
