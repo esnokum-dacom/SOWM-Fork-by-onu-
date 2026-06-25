@@ -14,7 +14,7 @@
 #define UI_HUD 1
 
 // Coordinates 
-#define CORDS 0
+#define CORDS 1
 
 #define ZOOM_STEP     1.1f
 #define ZOOM_STEP_OUT 0.9f

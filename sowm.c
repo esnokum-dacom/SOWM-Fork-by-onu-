@@ -51,6 +51,14 @@ static Window       root;
 static Window       hud_win = 0;
 static Window	    minimap_win[MAX_MONITORS] = {0};
 static GC	    minimap_gc                = 0;
+
+static Atom net_supported, net_wm_window_type, net_wm_window_type_dock,
+            net_wm_strut, net_wm_strut_partial, net_current_desktop,
+            net_supporting_wm_check, net_wm_name, ewmh_utf8_string;
+
+
+static int strut[4] = {0, 0, 0, 0};
+
 int		    minimap		      = 1;
 static int	    minimap_px[MAX_MONITORS]  = {0};
 static int	    minimap_py[MAX_MONITORS]  = {0};
@@ -1025,6 +1033,7 @@ void configure_request(XEvent *e) {
     int sx = ev->x, sy = ev->y;
     unsigned int mask = ev->value_mask;
     client *target = NULL;
+
     if (list) {
         client *t2 = NULL, *c2 = list;
         for (; c2 && t2 != list->prev; t2 = c2, c2 = c2->next) {
@@ -1053,13 +1062,65 @@ void configure_request(XEvent *e) {
 
 }
 
+static int win_is_dock(Window w) {
+    Atom type;
+    int fmt;
+    unsigned long n, extra;
+    unsigned char *data = NULL;
+
+    if (XGetWindowProperty(d, w, net_wm_window_type, 0, 1, False, XA_ATOM,
+            &type, &fmt, &n, &extra, &data) == Success && data) {
+        int dock = (*(Atom *)data == net_wm_window_type_dock);
+        XFree(data);
+        return dock;
+    }
+    return 0;
+}
+
+static void update_struts(Window w) {
+    Atom type;
+    int fmt;
+    unsigned long n, extra;
+    unsigned char *data = NULL;
+
+    if (XGetWindowProperty(d, w, net_wm_strut_partial, 0, 12, False, XA_CARDINAL,
+            &type, &fmt, &n, &extra, &data) == Success && data && n >= 4) {
+        long *s = (long *)data;
+        strut[0] = MAX(strut[0], (int)s[0]); // left
+        strut[1] = MAX(strut[1], (int)s[1]); // right
+        strut[2] = MAX(strut[2], (int)s[2]); // top
+        strut[3] = MAX(strut[3], (int)s[3]); // bottom
+        XFree(data);
+        return;
+    }
+    if (data) XFree(data);
+
+    if (XGetWindowProperty(d, w, net_wm_strut, 0, 4, False, XA_CARDINAL,
+            &type, &fmt, &n, &extra, &data) == Success && data && n == 4) {
+        long *s = (long *)data;
+        strut[0] = MAX(strut[0], (int)s[0]);
+        strut[1] = MAX(strut[1], (int)s[1]);
+        strut[2] = MAX(strut[2], (int)s[2]);
+        strut[3] = MAX(strut[3], (int)s[3]);
+        XFree(data);
+    }
+}
+
 void map_request(XEvent *e) {
     Window w = e->xmaprequest.window;
+
+    if (win_is_dock(w)) {
+        update_struts(w);
+        XMapWindow(d, w);
+        return;
+    }
+
     XSelectInput(d, w, StructureNotifyMask | EnterWindowMask | PropertyChangeMask);
     win_size(w, &wx, &wy, &ww, &wh);
     win_add(w);
     minimap_update();
     cur = list->prev;
+
     if (wx + wy == 0) win_center((Arg){0});
     {
         int sx = 0, sy = 0;
@@ -1071,6 +1132,26 @@ void map_request(XEvent *e) {
         cur->cx = (float)sx / z + canvas.pan_x[m];
         cur->cy = (float)sy / z + canvas.pan_y[m];
     }
+
+    if (wx + wy == 0) {
+        int cx, cy, dummy;
+        unsigned int udummy;
+        Window wdummy;
+        XQueryPointer(d, root, &wdummy, &wdummy, &cx, &cy, &dummy, &dummy, &udummy);
+        win_size(w, &dummy, &dummy, &ww, &wh);
+        int ax = strut[0];
+        int ay = strut[2];
+        int aw = sw - strut[0] - strut[1];
+        int ah = sh - strut[2] - strut[3];
+        int nx = cx - (int)ww / 2;
+        int ny = cy - (int)wh / 2;
+        if (nx < ax)                 nx = ax;
+        if (ny < ay)                 ny = ay;
+        if (nx + (int)ww > ax + aw)  nx = ax + aw - (int)ww;
+        if (ny + (int)wh > ay + ah)  ny = ay + ah - (int)wh;
+        XMoveWindow(d, w, nx, ny);
+    }
+
     XMapWindow(d, w);
     win_focus(list->prev);
 }
@@ -1190,7 +1271,9 @@ void move_nextmon(const Arg arg) {
 
 int main(void) {
     XEvent ev;
+
     if (!(d = XOpenDisplay(0))) exit(1);
+
     signal(SIGCHLD, SIG_IGN);
     XSetErrorHandler(xerror);
 
@@ -1199,10 +1282,44 @@ int main(void) {
     sw    = XDisplayWidth(d, s);
     sh    = XDisplayHeight(d, s);
 
+    net_supporting_wm_check  = XInternAtom(d, "_NET_SUPPORTING_WM_CHECK",  False);
+    net_wm_name              = XInternAtom(d, "_NET_WM_NAME",              False);
+    ewmh_utf8_string         = XInternAtom(d, "UTF8_STRING",               False);
+    net_supported            = XInternAtom(d, "_NET_SUPPORTED",            False);
+    net_wm_window_type       = XInternAtom(d, "_NET_WM_WINDOW_TYPE",       False);
+    net_wm_window_type_dock  = XInternAtom(d, "_NET_WM_WINDOW_TYPE_DOCK",  False);
+    net_wm_strut             = XInternAtom(d, "_NET_WM_STRUT",             False);
+    net_wm_strut_partial     = XInternAtom(d, "_NET_WM_STRUT_PARTIAL",     False);
+    net_current_desktop      = XInternAtom(d, "_NET_CURRENT_DESKTOP",      False);
+
+    Window wmcheck = XCreateSimpleWindow(d, root, 0, 0, 1, 1, 0, 0, 0);
+    XChangeProperty(d, root,    net_supporting_wm_check, XA_WINDOW, 32,
+        PropModeReplace, (unsigned char *)&wmcheck, 1);
+    XChangeProperty(d, wmcheck, net_supporting_wm_check, XA_WINDOW, 32,
+        PropModeReplace, (unsigned char *)&wmcheck, 1);
+    XChangeProperty(d, wmcheck, net_wm_name, ewmh_utf8_string, 8,
+        PropModeReplace, (unsigned char *)"sowm-extended", 13);
+
+    Atom supported[] = {
+        net_supporting_wm_check,
+        net_wm_name,
+        net_wm_window_type,
+        net_wm_window_type_dock,
+        net_wm_strut,
+        net_wm_strut_partial,
+        net_current_desktop,
+    };
+    XChangeProperty(d, root, net_supported, XA_ATOM, 32,
+        PropModeReplace, (unsigned char *)supported,
+        sizeof(supported) / sizeof(Atom));
+
+    long cur_ws = 0;
+    XChangeProperty(d, root, net_current_desktop, XA_CARDINAL, 32,
+        PropModeReplace, (unsigned char *)&cur_ws, 1);
+
     XSelectInput(d, root, SubstructureRedirectMask);
     XDefineCursor(d, root, XCreateFontCursor(d, 68));
     input_grab(root);
-
 
     if (UI_HUD) {
 	if (CORDS) {
@@ -1219,7 +1336,6 @@ int main(void) {
 	    }
 	}
     }
-
 
     while (1 && !XNextEvent(d, &ev)) {
         if ((ev.type == MapNotify || ev.type == ConfigureNotify) && hud_win)
