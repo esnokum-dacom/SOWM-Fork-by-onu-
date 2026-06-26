@@ -214,7 +214,7 @@ static void minimap_init(Display *dpy) {
 
     XftColorAllocValue(dpy, visual, cmap, &xr, &mm_color);
 
-    mm_font = XftFontOpenName(dpy, DefaultScreen(dpy), "monospace:size=12");
+    mm_font = XftFontOpenName(dpy, DefaultScreen(dpy), "Terminus:style=Regular:pixelsize=16:antialias=false:autohint=false");
     mm_inited = 1;
 }
 
@@ -338,7 +338,7 @@ static void always_ot() {
     for (int i = 0; i < MAX_MONITORS; i++)
         if (minimap_win[i]) XRaiseWindow(d, minimap_win[i]);
 
-    printf("cur=%p f=%d\n", cur, cur ? cur->f : -1);
+    // printf("cur=%p f=%d\n", cur, cur ? cur->f : -1);
 }
 
 void toggle_minimap(const Arg arg) {
@@ -399,7 +399,7 @@ void hud_update(void) {
 
     XftDraw *draw = XftDrawCreate(d, hud_win, visual, cmap);
 
-    XftFont *font = XftFontOpenName( d, DefaultScreen(d), "monospace:size=12" );
+    XftFont *font = XftFontOpenName( d, DefaultScreen(d), "Terminus:style=Regular:pixelsize=16:antialias=false:autohint=false" );
 
     if (font) {
 	XRenderColor xr = { .red   = 65535, .green = 65535, .blue  = 65535, .alpha = 65535 };
@@ -638,7 +638,7 @@ void titlebar_draw(client *c) {
 
     XftDraw *draw = XftDrawCreate(d, c->titlebar, visual, cmap);
 
-    XftFont *font = XftFontOpenName( d, DefaultScreen(d), "monospace:size=12" );
+    XftFont *font = XftFontOpenName( d, DefaultScreen(d), "Terminus:style=Regular:pixelsize=16:antialias=false:autohint=false" );
 
     if (font) {
 	XRenderColor xr = { .red   = 65535, .green = 65535, .blue  = 65535, .alpha = 65535 };
