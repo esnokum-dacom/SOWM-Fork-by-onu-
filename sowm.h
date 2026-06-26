@@ -85,6 +85,7 @@ void win_center(const Arg arg);
 void win_del(Window w);
 void win_fs(const Arg arg);
 void win_focus(client *c);
+void titlebar_focus(Window w);
 void win_kill(const Arg arg);
 void win_prev(const Arg arg);
 void win_next(const Arg arg);

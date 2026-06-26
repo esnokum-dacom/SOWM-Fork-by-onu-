@@ -512,7 +512,6 @@ void resizeclient(client *c, int w, int h) {
 
     if (c->titlebar) {
         XResizeWindow(d, c->titlebar, w, TITLEBAR_HEIGHT);
-        titlebar_draw(c);
     }
 
     XSync(d, False);
@@ -669,6 +668,7 @@ void canvas_apply_all(void) {
         client_move(c,
                     canvas_to_screen(c->cx, px, z),
                     canvas_to_screen(c->cy, py, z));
+	titlebar_draw(c);
     }
     XFlush(d);
     hud_update();
@@ -709,6 +709,13 @@ void win_focus(client *c) {
                     XInternAtom(d, "_NET_ACTIVE_WINDOW", False),
                     XA_WINDOW, 32, PropModeReplace,
                     (unsigned char *)&cur->w, 1);
+    // if (cur->titlebar) XRaiseWindow(d, cur->titlebar);
+}
+
+
+void titlebar_focus(Window w) {
+    client *own = client_from_titlebar(w);
+    if (own) win_focus(own);
 }
 
 void canvas_focus(client *c) {
@@ -742,6 +749,7 @@ void canvas_focus(client *c) {
     canvas_apply_all();
     XRaiseWindow(d, c->w);
     win_focus(c);
+    titlebar_focus(c->titlebar);
 }
 
 void win_prev(const Arg arg) { if (cur) canvas_focus(cur->prev); }
@@ -837,6 +845,7 @@ void notify_motion(XEvent *e) {
         int new_sx = wx + xd;
         int new_sy = wy + yd;
         client_move(cur, new_sx, new_sy);
+	if (cur->titlebar) XRaiseWindow(d, cur->titlebar);
 	minimap_update();
 	titlebar_draw(cur);
         if (cur) {
@@ -850,11 +859,7 @@ void notify_motion(XEvent *e) {
         client_resize(cur, MAX(1, ww + xd), MAX(1, wh + yd));
     }
 }
-
-void key_press(XEvent *e) {
-    KeySym keysym = XkbKeycodeToKeysym(d, e->xkey.keycode, 0, 0);
-    for (unsigned int i = 0; i < sizeof(keys) / sizeof(*keys); ++i)
-        if (keys[i].keysym == keysym &&
+void key_press(XEvent *e) { KeySym keysym = XkbKeycodeToKeysym(d, e->xkey.keycode, 0, 0); for (unsigned int i = 0; i < sizeof(keys) / sizeof(*keys); ++i) if (keys[i].keysym == keysym &&
             mod_clean(keys[i].mod) == mod_clean(e->xkey.state))
             keys[i].function(keys[i].arg);
 }
@@ -876,17 +881,21 @@ void button_press(XEvent *e) {
     if (!e->xbutton.subwindow) return;
     win_size(e->xbutton.subwindow, &wx, &wy, &ww, &wh);
     XRaiseWindow(d, e->xbutton.subwindow);
+
+    if (cur->titlebar) XRaiseWindow(d, cur->titlebar);
     mouse = e->xbutton;
 
     if (TITLEBAR == 1){
 	client *c = client_from_titlebar(e->xbutton.subwindow);
 
 	if (c) {
-	    cur = c;
+	    win_focus(c);
 	    mouse = e->xbutton;
 
 	    win_size(c->w, &wx, &wy, &ww, &wh);
 	    XRaiseWindow(d, c->w);
+	    if (cur->titlebar) XRaiseWindow(d, cur->titlebar);
+
 	}
     }
     return;
@@ -1051,12 +1060,14 @@ void win_fs(const Arg arg) {
 
 	hud_update();
 	minimap_update();
+        titlebar_draw(cur);
         if (!TITLEBAR) XUnmapWindow(d, cur->titlebar);
     } else {
         // XMoveResizeWindow(d, cur->w, cur->wx, cur->wy, cur->ww, cur->wh);
 	resizeclient(cur, cur->ww, cur->wh);
 	client_move(cur, cur->wx, cur->wy);
 	minimap_update();
+        titlebar_draw(cur);
         if (cur->titlebar) {
             // XMoveResizeWindow(d, cur->titlebar, cur->wx, cur->wy - TITLEBAR_HEIGHT, cur->ww, TITLEBAR_HEIGHT);
 	    resizeclient(cur, cur->ww, cur->wh);
@@ -1106,6 +1117,7 @@ void configure_request(XEvent *e) {
                 sx   = canvas_to_screen(c2->cx, canvas.pan_x[m], canvas.zoom[m]);
                 sy   = canvas_to_screen(c2->cy, canvas.pan_y[m], canvas.zoom[m]);
                 mask = (mask & ~(CWX | CWY)) | CWX | CWY;
+		titlebar_draw(t2);
                 break;
             }
         }
@@ -1118,9 +1130,8 @@ void configure_request(XEvent *e) {
                      });
 
     if (target && target->titlebar) {
-        XMoveResizeWindow(d, target->titlebar, sx, sy - TITLEBAR_HEIGHT,
-                           ev->width, TITLEBAR_HEIGHT);
-        titlebar_draw(target);
+        XMoveResizeWindow(d, target->titlebar, sx, sy - TITLEBAR_HEIGHT, ev->width, TITLEBAR_HEIGHT);
+	titlebar_draw(target);
     }
 
 }
