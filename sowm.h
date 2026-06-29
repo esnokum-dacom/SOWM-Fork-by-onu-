@@ -26,6 +26,12 @@
    (ShiftMask | ControlMask | Mod1Mask | Mod2Mask | Mod3Mask | Mod4Mask | \
     Mod5Mask))
 
+#define INTERSECT(x,y,w,h,m)    (MAX(0, MIN((x)+(w),(m)->wx+(m)->ww) - MAX((x),(m)->wx)) \
+                               * MAX(0, MIN((y)+(h),(m)->wy+(m)->wh) - MAX((y),(m)->wy)))
+
+
+typedef struct Monitor Monitor;
+
 typedef struct {
   const char **com;
   const int    i;
@@ -45,7 +51,7 @@ typedef struct client {
   Window w;
   Window titlebar;
   Window border;
-  int mon;
+  Monitor *mon;
   int f;
   int wx, wy;
   int mx, my;
@@ -58,6 +64,19 @@ typedef struct client {
   float cx, cy;
   unsigned int ww, wh;
 } client;
+
+struct Monitor {
+	int num;
+	int mx, my, mw, mh;
+	int wx, wy, ww, wh;
+	unsigned int sellt;
+	int showbar;
+	int topbar;
+	client *clients;
+	client *sel;
+	client *stack;
+	Monitor *next;
+};
 
 typedef struct {
   float pan_x[MAX_MONITORS];
@@ -79,6 +98,7 @@ char *copystr(const char *s);
 void button_press(XEvent *e);
 void button_release(XEvent *e);
 void configure_request(XEvent *e);
+void configure_notify(XEvent *e);
 void input_grab(Window root);
 void key_press(XEvent *e);
 void notify_property(XEvent *e);
@@ -109,11 +129,26 @@ static void canvas_sync_to_root(void);
 void canvas_apply_all(void);
 void canvas_focus(client *c);
 
+
+int getrootptr(int *x, int *y);
+Monitor *createmon(void);
+Monitor *recttomon(int x, int y, int w, int h);
+client *wintoclient(Window w);
+Monitor *wintomon(Window w);
+void cleanupmon(Monitor *mon);
+
+#ifdef XINERAMA
+static int isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info);
+#endif
+
+
+int updategeom(void);
+
 static void hud_create(void);
 void hud_update(void);
 void minimap_create(void);
 static void minimap_init(Display *dpy);
-static void minimap_draw_one(Window panel, int mon, int mon_w, int mon_h, int mon_x, int mon_y);
+static void minimap_draw_one(Window panel, Monitor *mon, int mon_w, int mon_h, int mon_x, int mon_y);
 static long now_ms(void);
 void minimap_update(void);
 void titlebar_update(client *c);

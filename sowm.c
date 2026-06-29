@@ -23,6 +23,8 @@
 static client *list = NULL;
 static client *cur  = NULL;
 
+static Monitor *mons, *selmon;
+
 static XftFont  *mm_font = NULL;
 static XftDraw  *mm_draw = NULL;
 static XftColor  mm_color;
@@ -75,6 +77,7 @@ static void (*events[LASTEvent])(XEvent *e) = {
     [PropertyNotify]   = notify_property,
     [ButtonRelease]    = button_release,
     [ConfigureRequest] = configure_request,
+    [ConfigureNotify]  = configure_notify,
     [KeyPress]         = key_press,
     [MapRequest]       = map_request,
     [MappingNotify]    = mapping_notify,
@@ -125,6 +128,14 @@ int mon_at_win(Window w) {
     int cx2 = wx2 + (int)ww2 / 2;
     int cy2 = wy2 + (int)wh2 / 2;
     return mon_from_point(cx2, cy2);
+}
+
+int getrootptr(int *x, int *y) {
+	int di;
+	unsigned int dui;
+	Window dummy;
+
+	return XQueryPointer(d, root, &dummy, &dummy, x, y, &di, &di, &dui);
 }
 
 void minimap_create(void) {
@@ -205,7 +216,7 @@ static void minimap_init(Display *dpy) {
     mm_inited = 1;
 }
 
-static void minimap_draw_one(Window panel, int mon, int mon_w, int mon_h, int mon_x, int mon_y) {
+static void minimap_draw_one(Window panel, Monitor *mon, int mon_w, int mon_h, int mon_x, int mon_y) {
     if (!panel) return;
     if (mon_w <= 0 || mon_h <= 0) return;
 
@@ -215,7 +226,7 @@ static void minimap_draw_one(Window panel, int mon, int mon_w, int mon_h, int mo
     int mxw, myw;
     win_size(panel, &mxw, &myw, &mw, &mh);
 
-    Pixmap buf = minimap_pix[mon];
+    Pixmap buf = minimap_pix[mon->num];
     if (!buf) return;
 
     Visual *visual = DefaultVisual(d, DefaultScreen(d));
@@ -240,8 +251,8 @@ static void minimap_draw_one(Window panel, int mon, int mon_w, int mon_h, int mo
         maxy = MAX(maxy, c->cy + c->height);
     }
 
-    float vx0 = mon_x + canvas.pan_x[mon];
-    float vy0 = mon_y +canvas.pan_y[mon];
+    float vx0 = mon_x + canvas.pan_x[mon->num];
+    float vy0 = mon_y +canvas.pan_y[mon->num];
     float vx1 = vx0 + mon_w;
     float vy1 = vy0 + mon_h;
 
@@ -313,7 +324,11 @@ void minimap_update(void) {
     if (!info) return;
 
     for (int i = 0; i < n; i++) {
-	minimap_draw_one(minimap_win[i], i, info[i].width, info[i].height, info[i].x_org, info[i].y_org);
+	Monitor *m = NULL;
+	for (Monitor *mo = mons; mo; mo = mo->next)
+	    if (mo->num == i) { m = mo; break; }
+	if (m)
+	    minimap_draw_one(minimap_win[i], m, info[i].width, info[i].height, info[i].x_org, info[i].y_org);
     }
 
     XFree(info);
@@ -574,6 +589,141 @@ void resizeclient(client *c, int w, int h) {
     XSync(d, False);
 }
 
+Monitor *createmon(void) {
+	Monitor *m;
+
+	m = calloc(1, sizeof(Monitor));
+	return m;
+}
+
+Monitor *recttomon(int x, int y, int w, int h) {
+	Monitor *m, *r = selmon;
+	int a, area = 0;
+
+	for (m = mons; m; m = m->next)
+		if ((a = INTERSECT(x, y, w, h, m)) > area) {
+			area = a;
+			r = m;
+		}
+	return r;
+}
+
+client *wintoclient(Window w) {
+	client *c;
+	Monitor *m;
+
+	for (m = mons; m; m = m->next)
+		for (c = m->clients; c; c = c->next)
+			if (c->w == w)
+				return c;
+	return NULL;
+}
+
+Monitor *wintomon(Window w) {
+	int x, y;
+	client *c;
+	Monitor *m;
+
+	if (w == root && getrootptr(&x, &y))
+		return recttomon(x, y, 1, 1);
+	for (m = mons; m; m = m->next)
+	if ((c = wintoclient(w)))
+		return c->mon;
+	return selmon;
+}
+
+void cleanupmon(Monitor *mon) {
+	Monitor *m;
+
+	if (mon == mons)
+		mons = mons->next;
+	else {
+		for (m = mons; m && m->next != mon; m = m->next);
+		m->next = mon->next;
+	}
+	free(mon);
+}
+
+#ifdef XINERAMA
+static int isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info) {
+	while (n--)
+		if (unique[n].x_org == info->x_org && unique[n].y_org == info->y_org
+		&& unique[n].width == info->width && unique[n].height == info->height)
+			return 0;
+	return 1;
+}
+#endif
+
+int updategeom(void) {
+	int dirty = 0;
+
+#ifdef XINERAMA
+	if (XineramaIsActive(d)) {
+		int i, j, n, nn;
+		client *c;
+		Monitor *m;
+		XineramaScreenInfo *info = XineramaQueryScreens(d, &nn);
+		XineramaScreenInfo *unique = NULL;
+
+		for (n = 0, m = mons; m; m = m->next, n++);
+
+		unique = calloc(nn, sizeof(XineramaScreenInfo));
+		for (i = 0, j = 0; i < nn; i++)
+			if (isuniquegeom(unique, j, &info[i]))
+				memcpy(&unique[j++], &info[i], sizeof(XineramaScreenInfo));
+		XFree(info);
+		nn = j;
+
+		for (i = n; i < nn; i++) {
+			for (m = mons; m && m->next; m = m->next);
+			if (m)
+				m->next = createmon();
+			else
+				mons = createmon();
+		}
+		for (i = 0, m = mons; i < nn && m; m = m->next, i++)
+			if (i >= n
+			|| unique[i].x_org != m->mx || unique[i].y_org != m->my
+			|| unique[i].width != m->mw || unique[i].height != m->mh)
+			{
+				dirty = 1;
+				m->num = i;
+				m->mx = m->wx = unique[i].x_org;
+				m->my = m->wy = unique[i].y_org;
+				m->mw = m->ww = unique[i].width;
+				m->mh = m->wh = unique[i].height;
+			}
+
+		for (i = nn; i < n; i++) {
+			for (m = mons; m && m->next; m = m->next);
+			while ((c = m->clients)) {
+				dirty = 1;
+				m->clients = c->next;
+				c->mon = mons;
+			}
+			if (m == selmon)
+				selmon = mons;
+			cleanupmon(m);
+		}
+		free(unique);
+	} else
+#endif
+	{ 
+		if (!mons)
+			mons = createmon();
+		if (mons->mw != sw || mons->mh != sh) {
+			dirty = 1;
+			mons->mw = mons->ww = sw;
+			mons->mh = mons->wh = sh;
+		}
+	}
+	if (dirty) {
+		selmon = mons;
+		selmon = wintomon(root);
+	}
+	return dirty;
+}
+
 void client_resize(client *c, unsigned int w, unsigned int h) {
     if (!c) return;
     int nw = (int)w, nh = (int)h;
@@ -785,9 +935,9 @@ static void canvas_sync_to_root(void) {
 void canvas_apply_all(void) {
 	if (!cur) return;
 	for win {
-	    int   m  = c->mon;
-	    float px = canvas.pan_x[m];
-	    float py = canvas.pan_y[m];
+	    Monitor *m  = c->mon;
+	    float px = canvas.pan_x[m->num];
+	    float py = canvas.pan_y[m->num];
 
 	    if (m == cur->mon && !c->f && !cur->f) {
 		client_move(c,
@@ -855,18 +1005,18 @@ void titlebar_focus(Window w) {
 void canvas_focus(client *c) {
     if (!c || (cur && cur->f) || c->f) return;
 
-    int m = c->mon;
+    Monitor *m = c->mon;
 
     int n;
     XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
     if (!info) { win_focus(c); return; }
 
     int mx = 0, my = 0, mw = sw, mh = sh;
-    if (m < n) {
-        mx = info[m].x_org;
-        my = info[m].y_org;
-        mw = info[m].width;
-        mh = info[m].height;
+    if (m->num < n) {
+        mx = info[m->num].x_org;
+        my = info[m->num].y_org;
+        mw = info[m->num].width;
+        mh = info[m->num].height;
     }
     XFree(info);
 
@@ -877,8 +1027,8 @@ void canvas_focus(client *c) {
     float target_sx = mx + (mw - (int)cw) / 2.0f;
     float target_sy = my + (mh - (int)ch) / 2.0f;
 
-    canvas.pan_x[m] = c->cx - target_sx;
-    canvas.pan_y[m] = c->cy - target_sy;
+    canvas.pan_x[m->num] = c->cx - target_sx;
+    canvas.pan_y[m->num] = c->cy - target_sy;
 
     canvas_apply_all();
 
@@ -902,7 +1052,7 @@ void canvas_focus(client *c) {
 void win_prev(const Arg arg) {
     if (!cur || !list) return;
 
-    int m = cur->mon;
+    Monitor *m = cur->mon;
     if (cur->f) return;
 
     client *c = cur->prev;
@@ -926,7 +1076,7 @@ void win_prev(const Arg arg) {
 void win_next(const Arg arg) { 
     if (!cur || !list) return;
 
-    int m = cur->mon;
+    Monitor *m = cur->mon;
     if (cur->f) return;
 
     client *c = cur->next;
@@ -1033,10 +1183,10 @@ void notify_motion(XEvent *e) {
         titlebar_update(cur);
         border_draw(cur);
         if (cur) {
-	    cur->mon = mon_at_win(cur->w);
-	    int   m = cur->mon;
-	    cur->cx = (float)new_sx + canvas.pan_x[m];
-	    cur->cy = (float)new_sy + canvas.pan_y[m];
+	    cur->mon->num = mon_at_win(cur->w);
+	    Monitor *m = cur->mon;
+	    cur->cx = (float)new_sx + canvas.pan_x[m->num];
+	    cur->cy = (float)new_sy + canvas.pan_y[m->num];
 	}
     } else if (mouse.button == 3) {
         client_resize(cur, MAX(1, ww + xd), MAX(1, wh + yd));
@@ -1133,14 +1283,20 @@ void win_add(Window w) {
     if (!(c = (client *)calloc(1, sizeof(client)))) exit(1);
 
     c->w       = w;
-    c->mon = mon_at_win(w);
+
+    if (!mons) updategeom();    
+
+    c->mon = selmon ? selmon : mons;
+    if (!c->mon) {free(c); return;}
+
+    c->mon->num = mon_at_win(w);
 
     int sx = 0, sy = 0;
     unsigned int dw2, dh2;
     win_size(w, &sx, &sy, &dw2, &dh2);
-    int   m = c->mon;
-    c->cx = (float)sx + canvas.pan_x[m];
-    c->cy = (float)sy + canvas.pan_y[m];
+    Monitor *m = c->mon;
+    c->cx = (float)sx + canvas.pan_x[m->num];
+    c->cy = (float)sy + canvas.pan_y[m->num];
 
     c->x = sx;
     c->y = sy;
@@ -1247,10 +1403,10 @@ void win_center(const Arg arg) {
 
     client_move(cur, sx, sy);
 
-    cur->mon = mon_at_win(cur->w);
-    int   m = cur->mon;
-    cur->cx = (float)sx + canvas.pan_x[m];
-    cur->cy = (float)sy + canvas.pan_y[m];
+    cur->mon->num = mon_at_win(cur->w);
+    Monitor *m = cur->mon;
+    cur->cx = (float)sx + canvas.pan_x[m->num];
+    cur->cy = (float)sy + canvas.pan_y[m->num];
     minimap_update(); 
 }
 
@@ -1340,11 +1496,11 @@ void configure_request(XEvent *e) {
         for (; c2 && t2 != list->prev; t2 = c2, c2 = c2->next) {
             if (c2->w == ev->window) {
                 target = c2;
-                int m = c2->mon;
-		sx = canvas_to_screen(c2->cx, canvas.pan_x[m]);
-		sy = canvas_to_screen(c2->cy, canvas.pan_y[m]);
+                Monitor *m = c2->mon;
+		sx = canvas_to_screen(c2->cx, canvas.pan_x[m->num]);
+		sy = canvas_to_screen(c2->cy, canvas.pan_y[m->num]);
                 mask = (mask & ~(CWX | CWY)) | CWX | CWY;
-		titlebar_update(t2);
+		titlebar_update(c2);
                 break;
             }
         }
@@ -1366,6 +1522,134 @@ void configure_request(XEvent *e) {
                           ev->width + BORDER_W * 2, ev->height + TITLEBAR_HEIGHT + BORDER_W * 2);
         border_draw(target);
     }
+}
+
+void configure_notify(XEvent *e) {
+    XConfigureEvent *ev = &e->xconfigure;
+
+    if (ev->window != root)
+        return;
+
+    int dirty = (sw != ev->width || sh != ev->height);
+
+    sw = ev->width;
+    sh = ev->height;
+
+    if (!dirty)
+        return;
+
+    if (updategeom()) {
+	XConfigureEvent *ev = &e->xconfigure;
+	
+	if (ev->window != root)
+	    return;
+	
+	int dirty = (sw != ev->width || sh != ev->height);
+	
+	sw = ev->width;
+	sh = ev->height;
+	
+	if (!dirty)
+	    return;
+	
+	minimap_create();
+	
+	if (hud_win) {
+	    int hud_w = 320;
+	    int hud_x = (sw - hud_w) / 2;
+	    XMoveWindow(d, hud_win, hud_x, 4);
+	}
+	
+	for (client *c = list; c; c = c->next) {
+	
+	    c->mon->num = mon_at_win(c->w);
+	
+	    Monitor *m = c->mon;
+	
+	    int sx = canvas_to_screen(c->cx, canvas.pan_x[m->num]);
+	    int sy = canvas_to_screen(c->cy, canvas.pan_y[m->num]);
+	
+	    client_move(c, sx, sy);
+	
+	    if (c->f) {
+	        int n;
+	        XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
+	
+	        if (info && m->num < n) {
+	
+	            if (TITLEBAR) {
+	                resizeclient(
+	                    c,
+	                    info[m->num].width,
+	                    info[m->num].height - TITLEBAR_HEIGHT
+	                );
+	
+	                client_move(c, info[m->num].x_org, info[m->num].y_org + TITLEBAR_HEIGHT);
+	            } else {
+	                resizeclient(c, info[m->num].width, info[m->num].height);
+	
+	                client_move(c, info[m->num].x_org, info[m->num].y_org);
+	            }
+	
+	            XFree(info);
+	        }
+	    }
+	    configure(c);
+	}
+	
+	hud_update();
+	minimap_update();
+	canvas_sync_to_root();
+	
+	XSync(d, False);
+	    minimap_create();
+    }
+
+    if (hud_win) {
+        int hud_w = 320;
+        int hud_x = (sw - hud_w) / 2;
+        XMoveWindow(d, hud_win, hud_x, 4);
+    }
+
+    for (client *c = list; c; c = c->next) {
+
+        c->mon->num = mon_at_win(c->w);
+
+        Monitor *m = c->mon;
+
+        int sx = canvas_to_screen(c->cx, canvas.pan_x[m->num]);
+        int sy = canvas_to_screen(c->cy, canvas.pan_y[m->num]);
+
+        client_move(c, sx, sy);
+
+        if (c->f) {
+            int n;
+            XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
+
+            if (info && m->num < n) {
+
+                if (TITLEBAR) {
+                    resizeclient(c,info[m->num].width,info[m->num].height - TITLEBAR_HEIGHT);
+
+                    client_move(c, info[m->num].x_org, info[m->num].y_org + TITLEBAR_HEIGHT);
+                } else {
+                    resizeclient(c, info[m->num].width, info[m->num].height);
+
+                    client_move(c, info[m->num].x_org, info[m->num].y_org);
+                }
+
+                XFree(info);
+            }
+        }
+
+        configure(c);
+    }
+
+    hud_update();
+    minimap_update();
+    canvas_sync_to_root();
+
+    XSync(d, False);
 }
 
 static int win_is_dock(Window w) {
@@ -1437,10 +1721,10 @@ void map_request(XEvent *e) {
        int sx = 0, sy = 0;
        unsigned int dw2, dh2;
        win_size(w, &sx, &sy, &dw2, &dh2);
-       cur->mon = mon_at_win(w);
-       int   m = cur->mon;
-       cur->cx = (float)sx + canvas.pan_x[m];
-       cur->cy = (float)sy + canvas.pan_y[m];
+       cur->mon->num= mon_at_win(w);
+       Monitor *m = cur->mon;
+       cur->cx = (float)sx + canvas.pan_x[m->num];
+       cur->cy = (float)sy + canvas.pan_y[m->num];
    }
 
     XMapWindow(d, w);
@@ -1541,7 +1825,7 @@ void move_nextmon(const Arg arg) {
         client_move(cur, new_sx, new_sy);
 	minimap_update();
 	titlebar_update(cur);
-        cur->mon = next;
+        cur->mon->num = next;
         cur->cx = (float)new_sx + canvas.pan_x[next];
         cur->cy = (float)new_sy + canvas.pan_y[next];
     }
@@ -1562,6 +1846,7 @@ int main(void) {
     root  = RootWindow(d, s);
     sw    = XDisplayWidth(d, s);
     sh    = XDisplayHeight(d, s);
+    updategeom(); 
 
     net_supporting_wm_check  = XInternAtom(d, "_NET_SUPPORTING_WM_CHECK",  False);
     net_wm_name              = XInternAtom(d, "_NET_WM_NAME",              False);
