@@ -84,6 +84,7 @@ void key_press(XEvent *e);
 void notify_property(XEvent *e);
 void notify_unmap(XEvent *e);
 void map_request(XEvent *e);
+void expose_event(XEvent *e);
 void mapping_notify(XEvent *e);
 void notify_destroy(XEvent *e);
 void notify_enter(XEvent *e);
@@ -107,6 +108,7 @@ void canvas_pan_key(const Arg arg);
 void canvas_reset(const Arg arg);
 static void canvas_sync_to_root(void);
 void canvas_apply_all(void);
+void apply_mask(Window w, int wx, int wy, unsigned int ww, unsigned int wh, int mx, int my, int mw, int mh); 
 void canvas_focus(client *c);
 
 static void hud_create(void);

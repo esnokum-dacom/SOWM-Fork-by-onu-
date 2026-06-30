@@ -76,6 +76,7 @@ static void (*events[LASTEvent])(XEvent *e) = {
     [ButtonRelease]    = button_release,
     [ConfigureRequest] = configure_request,
     [KeyPress]         = key_press,
+    [Expose]	       = expose_event,
     [MapRequest]       = map_request,
     [MappingNotify]    = mapping_notify,
     [DestroyNotify]    = notify_destroy,
@@ -531,6 +532,26 @@ void client_move(client *c, int x, int y) {
 	                 &wc);
     }
 
+    int n;
+    XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
+    if (info && c->mon < n) {
+	int mx = info[c->mon].x_org;
+	int my = info[c->mon].y_org;
+	int mw = info[c->mon].width;
+	int mh = info[c->mon].height;
+
+	apply_mask(c->w, x, y, c->width, c->height, mx, my, mw, mh);
+
+	if (c->titlebar)
+	    apply_mask(c->titlebar, x, y - TITLEBAR_HEIGHT, c->width, TITLEBAR_HEIGHT, mx, my, mw, mh);
+	if (c->border) {
+            apply_mask(c->border, x - BORDER_W, y - TITLEBAR_HEIGHT - BORDER_W,
+		c->width + BORDER_W * 2, c->height + TITLEBAR_HEIGHT + BORDER_W * 2, mx, my, mw, mh);
+        }
+
+    }
+    if (info) XFree(info);
+
     XSync(d, False);
 }
 
@@ -570,6 +591,33 @@ void resizeclient(client *c, int w, int h) {
     if (c->border) {
         XResizeWindow(d, c->border, w + BORDER_W * 2, h + TITLEBAR_HEIGHT + BORDER_W * 2);
     }
+
+    XResizeWindow(d, c->w, w, h);
+
+    int x = c->x;
+    int y = c->y;
+
+    int n;
+    XineramaScreenInfo *info = XineramaQueryScreens(d, &n);
+    if (info && c->mon < n) {
+	int mx = info[c->mon].x_org;
+	int my = info[c->mon].y_org;
+	int mw = info[c->mon].width;
+	int mh = info[c->mon].height;
+
+	apply_mask(c->w, x, y, c->width, c->height, mx, my, mw, mh);
+
+	if (c->titlebar)
+	    apply_mask(c->titlebar, x, y - TITLEBAR_HEIGHT, c->width, TITLEBAR_HEIGHT, mx, my, mw, mh);
+	if (c->border) {
+            apply_mask(c->border, x - BORDER_W, y - TITLEBAR_HEIGHT - BORDER_W,
+		c->width + BORDER_W * 2, c->height + TITLEBAR_HEIGHT + BORDER_W * 2, mx, my, mw, mh);
+        }
+
+    }
+    if (info) XFree(info);
+
+
 
     XSync(d, False);
 }
@@ -818,6 +866,15 @@ void canvas_apply_all(void) {
                 if (c->border)   XMoveWindow(d, c->border,   mx - c->width - 8000, my - TITLEBAR_HEIGHT - BORDER_W);
                 continue;
             }
+            apply_mask(c->w, sx, sy, c->width, c->height, mx, my, mw, mh);
+            
+            if (c->titlebar) {
+                apply_mask(c->titlebar, sx, sy - TITLEBAR_HEIGHT, c->width, TITLEBAR_HEIGHT, mx, my, mw, mh);
+            }
+            
+            if (c->border) {
+                apply_mask(c->border, sx - BORDER_W, sy - TITLEBAR_HEIGHT - BORDER_W, c->width + BORDER_W * 2, c->height + TITLEBAR_HEIGHT + BORDER_W * 2, mx, my, mw, mh);
+            }
         }
 
         client_move(c, sx, sy);
@@ -831,6 +888,27 @@ void canvas_apply_all(void) {
     titlebar_update(cur);
     border_draw(cur);
     canvas_sync_to_root();
+}
+
+void apply_mask(Window w, int wx, int wy, unsigned int ww, unsigned int wh, int mx, int my, int mw, int mh) {
+    if (!w) return;
+
+    int ix = MAX(wx, mx);
+    int iy = MAX(wy, my);
+    int iw = MIN(wx + (int)ww, mx + mw) - ix;
+    int ih = MIN(wy + (int)wh, my + mh) - iy;
+
+    if (iw > 0 && ih > 0) {
+        XRectangle rect = {
+            .x = (short)(ix - wx),
+            .y = (short)(iy - wy),
+            .width  = (unsigned short)iw,
+            .height = (unsigned short)ih
+        };
+        XShapeCombineRectangles(d, w, ShapeBounding, 0, 0, &rect, 1, ShapeSet, Unsorted);
+    } else {
+        XShapeCombineMask(d, w, ShapeBounding, 0, 0, None, ShapeSet);
+    }
 }
 
 void canvas_pan(int mon, float dx, float dy) {
@@ -934,7 +1012,6 @@ void win_prev(const Arg arg) {
     if (cur->f) return;
 
     client *c = cur->prev;
-    if (!c) return;
 
     int checked = 0;
     int total = 0;
@@ -958,7 +1035,6 @@ void win_next(const Arg arg) {
     if (cur->f) return;
 
     client *c = cur->next;
-    if (!c) return;
 
     int checked = 0;
     int total = 0;
@@ -1055,13 +1131,18 @@ void notify_motion(XEvent *e) {
     if (mouse.button == 1) {
         int new_sx = wx + xd;
         int new_sy = wy + yd;
+
+	int cenx = new_sx + (int)(ww / 2);
+	int ceny = new_sy + (int)(wh / 2);
+	cur->mon = mon_from_point(cenx, ceny);
+
         client_move(cur, new_sx, new_sy);
+
         if (cur->titlebar) XRaiseWindow(d, cur->titlebar);
         minimap_update();
         titlebar_update(cur);
         border_draw(cur);
         if (cur) {
-	    cur->mon = mon_at_win(cur->w);
 	    int   m = cur->mon;
 	    cur->cx = (float)new_sx + canvas.pan_x[m];
 	    cur->cy = (float)new_sy + canvas.pan_y[m];
@@ -1121,10 +1202,34 @@ void button_press(XEvent *e) {
     }
 
     if (!e->xbutton.subwindow) return;
-    win_size(e->xbutton.subwindow, &wx, &wy, &ww, &wh);
-    XRaiseWindow(d, e->xbutton.subwindow);
 
-    if (cur->titlebar) XRaiseWindow(d, cur->titlebar);
+    client *target = NULL;
+    for win {
+        if (c->w == e->xbutton.subwindow || c->border == e->xbutton.subwindow || c->titlebar == e->xbutton.subwindow) {
+            target = c;
+            break;
+        }
+    }
+
+    if (target) {
+        win_focus(target);
+        
+        XRaiseWindow(d, target->w);
+        
+        if (target->titlebar) XRaiseWindow(d, target->titlebar);
+        
+        if (target->border) {
+            XWindowChanges wc = { .sibling = target->w, .stack_mode = Below };
+            XConfigureWindow(d, target->border, CWSibling | CWStackMode, &wc);
+        }
+        
+        win_size(target->w, &wx, &wy, &ww, &wh);
+    } else {
+        win_size(e->xbutton.subwindow, &wx, &wy, &ww, &wh);
+        XRaiseWindow(d, e->xbutton.subwindow);
+        if (cur && cur->titlebar) XRaiseWindow(d, cur->titlebar);
+    }
+
     mouse = e->xbutton;
 
     if (is_titlebar(e->xbutton.window) && !(e->xbutton.state & MOD)) {
@@ -1334,15 +1439,19 @@ void win_fs(const Arg arg) {
 	minimap_update();
 	titlebar_update(cur);
         if (!TITLEBAR) XUnmapWindow(d, cur->titlebar);
+        XRaiseWindow(d, cur->w);
     } else {
 	resizeclient(cur, cur->ww, cur->wh);
 	client_move(cur, cur->wx, cur->wy);
 	minimap_update();
 	titlebar_update(cur);
+        if (!TITLEBAR) XMapWindow(d, cur->titlebar);
         if (cur->titlebar) {
             XMapWindow(d, cur->titlebar);
+	    XRaiseWindow(d, cur->titlebar);
 	    titlebar_update(cur);
         }
+        XRaiseWindow(d, cur->w);
     }
 }
 
@@ -1450,6 +1559,23 @@ static void update_struts(Window w) {
         strut[2] = MAX(strut[2], (int)s[2]);
         strut[3] = MAX(strut[3], (int)s[3]);
         XFree(data);
+    }
+}
+
+void expose_event(XEvent *e) {
+    Window w = e->xexpose.window;
+    
+    client *c = client_from_titlebar(w);
+    if (c) {
+        titlebar_draw(c);
+        return;
+    }
+
+    for win {
+        if (c->border == w) {
+            border_draw(c);
+            return;
+        }
     }
 }
 
