@@ -26,6 +26,12 @@
    (ShiftMask | ControlMask | Mod1Mask | Mod2Mask | Mod3Mask | Mod4Mask | \
     Mod5Mask))
 
+#define INTERSECT(x,y,w,h,m)    (MAX(0, MIN((x)+(w),(m)->wx+(m)->ww) - MAX((x),(m)->wx)) \
+                               * MAX(0, MIN((y)+(h),(m)->wy+(m)->wh) - MAX((y),(m)->wy)))
+
+
+typedef struct Monitor Monitor;
+
 typedef struct {
   const char **com;
   const int    i;
@@ -45,19 +51,33 @@ typedef struct client {
   Window w;
   Window titlebar;
   Window border;
-  int mon;
-  int f;
+  Monitor *mon;
+  int f, fl, nfocus, urgent;
   int wx, wy;
   int mx, my;
   int x, y;
   int width, height;
   float base_width, base_height;
-  int oldx, oldy, oldwidth, oldheight;
+  int oldx, oldy, oldwidth, oldheight, oldstate;
   int basew, baseh, incw, inch, maxw, maxh, minw, minh;
   float mina, maxa;      
   float cx, cy;
+  float cx_saved, cy_saved;
   unsigned int ww, wh;
 } client;
+
+struct Monitor {
+	int num;
+	int mx, my, mw, mh;
+	int wx, wy, ww, wh;
+	unsigned int sellt;
+	int showbar;
+	int topbar;
+	client *clients;
+	client *sel;
+	client *stack;
+	Monitor *next;
+};
 
 typedef struct {
   float pan_x[MAX_MONITORS];
@@ -75,10 +95,16 @@ typedef struct {
     int x, y;
 } ButtonTb;
 
+enum { NetSupported, NetWMName, NetWMState, NetWMCheck,
+       NetWMFullscreen, NetActiveWindow, NetWMWindowType,
+       NetWMWindowTypeDialog, NetClientList, NetLast };
+enum { WMProtocols, WMDelete, WMState, WMTakeFocus, WMLast };
+
 char *copystr(const char *s);
 void button_press(XEvent *e);
 void button_release(XEvent *e);
 void configure_request(XEvent *e);
+void configure_notify(XEvent *e);
 void input_grab(Window root);
 void key_press(XEvent *e);
 void notify_property(XEvent *e);
@@ -88,11 +114,16 @@ void mapping_notify(XEvent *e);
 void notify_destroy(XEvent *e);
 void notify_enter(XEvent *e);
 void notify_motion(XEvent *e);
+void notify_expose(XEvent *e);
+void clientmessage(XEvent *e);
 void run(const Arg arg);
 void win_add(Window w);
 void win_center(const Arg arg);
 void win_del(Window w);
-void win_fs(const Arg arg);
+void win_fs(client *c, int f);
+void setfs(const Arg arg);
+void seturgent(client *c, int urg);
+void setfocus(client *c);
 void win_focus(client *c);
 void titlebar_focus(Window w);
 void win_kill(const Arg arg);
@@ -105,15 +136,32 @@ void ws_focusnext(const Arg arg);
 void canvas_pan(int mon, float dx, float dy);
 void canvas_pan_key(const Arg arg);
 void canvas_reset(const Arg arg);
-static void canvas_sync_to_root(void);
 void canvas_apply_all(void);
 void canvas_focus(client *c);
+void cleanupmon(Monitor *mon);
+
+
+Monitor *createmon(void);
+Monitor *recttomon(int x, int y, int w, int h);
+Monitor *wintomon(Window w);
+client *wintoclient(Window w);
+int sendevent(client *c, Atom proto);
+int getrootptr(int *x, int *y);
+
+static void canvas_sync_to_root(void);
+
+#ifdef XINERAMA
+static int isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info);
+#endif
+
+
+int updategeom(void);
 
 static void hud_create(void);
 void hud_update(void);
 void minimap_create(void);
 static void minimap_init(Display *dpy);
-static void minimap_draw_one(Window panel, int mon, int mon_w, int mon_h, int mon_x, int mon_y);
+static void minimap_draw_one(Window panel, Monitor *mon, int mon_w, int mon_h, int mon_x, int mon_y);
 static long now_ms(void);
 void minimap_update(void);
 void titlebar_update(client *c);

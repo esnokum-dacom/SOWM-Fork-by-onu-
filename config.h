@@ -13,6 +13,12 @@
 // Title bar
 #define TITLEBAR 1
 
+// BORDER
+
+#define BORDER	    1
+#define BORDER_W    3
+
+
 // HUD
 #define UI_HUD 1
 
@@ -39,16 +45,13 @@ static const char *volmute[] = {"amixer", "sset", "Master", "toggle", 0};
 static struct key keys[] = {
     { MOD | ShiftMask, XK_c,      win_kill,        {0}             },
     { MOD,             XK_c,      win_center,      {0}             },
-    { MOD,             XK_f,      win_fs,          {0}             },
+    // { MOD,             XK_f,      win_fs,          {0}             },
     { Mod1Mask,        XK_Tab,    win_next,        {0}             },
     { Mod1Mask|ShiftMask, XK_Tab, win_prev,        {0}             },
 
     { MOD,             XK_period, ws_focusnext,    {0}             },
     { MOD|ShiftMask,   XK_period, move_nextmon,    {0}             },
     { MOD,             XK_b,	  toggle_minimap,  {0}		   },
-
-    { MOD,             XK_j,  canvas_zoom,     {.f = -1}	   },
-    { MOD,             XK_k,  canvas_zoom,     {.f = 1}		   },
 
     { MOD|ShiftMask,   XK_Left,   canvas_pan_key,  {.i = 0}        },
     { MOD|ShiftMask,   XK_Right,  canvas_pan_key,  {.i = 1}        },
